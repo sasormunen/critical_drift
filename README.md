@@ -3,32 +3,6 @@ Here you can find the code for simulating the directed adaptive IFRI-model descr
 
 The dynamics and topology are evolved with the Gillespie algorithm. The implementation uses the *networkx* package.
 
-## Example of use
-
-The model can be simulated by calling the function *gillespie(...)* from file *gillespie_code.py*. The adaptation rules are turned on by setting *HSP = True*. Other parameter options are listed in the file. 
-
-G, avg_deg, rv = gillespie()...
-returns the graph, realized average degree and a class instance which stores parameters. 
-
-If HSP==True:
-tvals
-Means
-Lams
-Corps
-Excessdegs
-Deduct
-scc_kmeans
-scc_sizes
-scc_edges
-
-testFs
-
-self.A
-self.A_transient
-self.comp_size
-self.dur
-
-
-The file *running_functions.py*...
+The model can be simulated by calling the function *gillespie(...)* from file *gillespie_code.py*. The parameter options are listed in the file. See the Jupyter notebook *example.ipynb* for a short example. 
 
 Unittests can be run by directly running the script *unittests.py*.
