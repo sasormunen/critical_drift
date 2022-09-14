@@ -88,13 +88,17 @@ class SimulationVariables:
         self.degdict = {}
         self.scc_sizes = []
         self.scc_edges = []
+        self.eig_dict = {}
+        self.spont_times = []
         
         
         self.testFs = {}
         self.activation_times = {}
+        self.firing_times = {}
         for node in self.nodes:
             self.testFs[node] = 0
             self.activation_times[node] =0
+            self.firing_times[node] = []
             
         self.modified_edges_ts = []
         self.modified_edges = []
@@ -297,6 +301,7 @@ class SimulationVariables:
         #lambda and eigs
         lam,eig = leading_left_eig(self.G)
         self.lams.append(lam)      #lnodes,lvals,sG = largest_nodes(eig,G,percentage = 0.2)
+        self.eig_dict = eig #since the previous dicts are not stored, this will give the aigenvector centrality values at the last recorded time
 
         if track_SCC == True:
             
@@ -332,24 +337,29 @@ def gillespie(graphtype = "ER", i_to_f = 0.7, f_to_r = 0.95, r_to_i = 0.4, t_max
                   spontaneous_firing = True,
                   HSP = False, l = 0.001, epsilon = 0.01,
                   track_SCC = False, testF = False, 
-                  writeout = False,runvars = None,degs_times = [10**6], record_step = 500,transient = 500,writeout_step = 10**6,idval = 0,dir = "../csvfiles/"):
+                  writeout = False,runvars = None,degs_times = [10**6], record_step = 500,transient = 500,writeout_step = 10**6,idval = 0,dir = "../csvfiles/",random_linkadd = True,
+                  firing_track_start = 10**6,firing_track_dur=200):
     
 
     """ simulates the IFRI-model with the gillespie algorithm
     
         inactive (I) -> firing (F) -> refractory (R) -> inactive
                         
-        graphtype - "ER" or a ready networkx graph G
+        graphtype - a ready networkx graph G or one of the following: "ER" (Erdos-Renyi), "scale_free", "WS" (Watts-Strogatz), "modified_ER". Note that the argument "avg_deg" will be ignored for any other network type than "ER".
         spont_rate - spontaneous firing rate (to balance finite size effects)
         l - determines the rate at which active nodes lose links
+        epsilon - the rate at which random node pairs gain links is a product of l and epsilon
         fraction_firing - initialized with int(fraction_firing*n) nodes in the firing state
         HSP - if True, applies the adaptation rules
         t_max - time limit before the simulation is ended
         track_SCC - if True, tracks the strongly connected component
-        testF - forms a dict of type {node: #time a node was activated during the run}
-        degstops - saves the degree dist at the specified times
-        runvars - either None or a SimulationVariables object
-        if HSP == True, writes 2 addition files, where first is the edgelist at t=0, and
+        testF - 1) forms a dict "activation_times" of type {node: #time a node has spent in the firing state during the run}
+                2) forms a dict "firing_times" of type {node: [time1,time2,...]...}
+        firing_track_start - starts to record the firing times of all nodes to a dict of the form {nodeid: [time1,time2...]...}
+        firing_track_dur - continues to recrod the firing times for this period after firing_track_start
+        degs_times - prints out the degree dist at the specified times
+        runvars - either None or a SimulationVariables object (the latter if you wish to combine some results with a previous run)
+        if HSP == True, writes 2 additional files, where the first is the edgelist at t=0, and
         the other tracks all edge additions/removals (columns: time, edge, removal/addition (-1 or 1))
         record_step - determines how often the network parameters (mean degree, leading eigenvalue of the adjacency matrix, Pearson correlation coefficient of nodes in-and out-degrees and the mean excesss degree) are calculated
         writeout_step - determines how often the parameter lists are written out to files
@@ -361,12 +371,23 @@ def gillespie(graphtype = "ER", i_to_f = 0.7, f_to_r = 0.95, r_to_i = 0.4, t_max
     
     if graphtype == "ER":
         G,n = ER_graph(avg_deg,n)
+        
+    elif graphtype == "WS":
+        G,n = WS_graph(n,step=2)
+        
+    elif graphtype == "modified_ER":
+        G,n = increase_lam(n, 2.15, 2.25)
+        
+    elif graphtype == "scale_free":
+        G,n = scale_free(n)
+        
     else:
         G = graphtype
+        graphtype = "own"
         n = len(list(G.nodes()))
     
     ###
-    outfile = ("runvars_startdeg_" + str(avg_deg) + "_nnodes_" + str(n) +
+    outfile = ("runvars_" + graphtype + "_startdeg_" + str(avg_deg) + "_nnodes_" + str(n) +
                "_HSP_" + str(HSP) + "_timesteps"+ "_" + str(t_max) + "_spontrate_" + str(spont_rate) +
                 "_l_" + str(l) + "_epsilon_" + str(epsilon))
     
@@ -476,12 +497,20 @@ def gillespie(graphtype = "ER", i_to_f = 0.7, f_to_r = 0.95, r_to_i = 0.4, t_max
                      
             else: #spontaneously
                 node = rchoice(rv.I)
+                rv.spont_times.append(t)
 
             rv.change_I_to_F(node)
+            
             if testF == True:
                 rv.activation_times[node] = t
                 rv.timeseries_F.append(rv.nF/rv.n)
                 rv.timeseries_t.append(t)
+                
+                if t > firing_track_start and t < (firing_track_start + firing_track_dur):
+                    if node in rv.firing_times:
+                        rv.firing_times[node].append(round(t,2))
+                    else:
+                        rv.firing_times[node] = [t]
                   
         elif u < (rv.p_f_to_r+rv.p_r_to_i+rv.p_i_to_f + rv.p_s+rv.p_l): #choose an F-node and then randomly one of its incoming links
 
@@ -493,13 +522,36 @@ def gillespie(graphtype = "ER", i_to_f = 0.7, f_to_r = 0.95, r_to_i = 0.4, t_max
                 rv.HSP_lose(pre,node,t)
 
         else: #add randomly one link (HSP)
+        
+            if random_linkadd == True:
             
-            node1,node2 = rv.choose_nodeinds()      
-            if rv.G.has_edge(node1,node2) == False:
-                rv.HSP_add(node1,node2,t)
+                node1,node2 = rv.choose_nodeinds()
+                if rv.G.has_edge(node1,node2) == False:
+                    rv.HSP_add(node1,node2,t)
+            else:
+            
+                success = None
+                while success == None:
+                
+                    node1,node2 = rv.choose_nodeinds()
+                    succs1 = list(rv.G.successors(node1))
+                
+                    if len(succs1) != 0:
+                        node2 = rchoice(succs1)
+                        succs2 = list(rv.G.successors(node2))
+                        
+                        if len(succs2) != 0:
+                            node3 = rchoice(succs2)
+                            
+                            if not node1 == node3 and rv.G.has_edge(node1,node3) == False:
+                                rv.HSP_add(node3,node1,t)
+                                success = 1
+                
+                                
+                            
                 
 
-    #after all iterations (if avalanche dies out, this is where we jump
+    #after all iterations (if avalanche dies out, this is where we jump)
     rv.average_activity(t_max)
     rv.dur = t
     if transient > t_max: #just checking
