@@ -8,6 +8,25 @@ import pandas as pd
 
 from numpy.random import randint
 from scipy.stats import pearsonr
+from random import choice as rchoice
+
+
+
+
+def WS_graph(N,step):
+
+    G =nx.DiGraph()
+    nodes = np.arange(N)
+
+    for n in nodes:
+        G.add_node(n)
+
+    ringnodes = list(nodes) + list(nodes)
+    for n in nodes:
+        G.add_edge(ringnodes[n],ringnodes[n+1])
+        G.add_edge(ringnodes[n],ringnodes[n+step])
+        
+    return G,N
 
 
 
@@ -24,7 +43,13 @@ def get_degrees(G,nodes):
         outdegs[node] = G.out_degree(node)
         
     return indegs,outdegs
-    
+
+
+def write_ER_edgelist(avg_deg,N,i):
+
+    G,n = ER_graph(avg_deg,N)
+    nx.write_edgelist(G,"../csvfiles/static_edgelists/ER_graph" + "_N_"+str(N) +"_avgdeg_" + str(avg_deg) + "_idval_" + str(i) + ".edgelist")
+
     
 
 def samedeg_as(indegs,outdegs):
@@ -197,7 +222,7 @@ def leading_left_eig(G):
     return lam,eig
 
 
-          
+
 
 def write_several_rows(outfile,list_of_lists,mode='w'):
 
@@ -223,18 +248,19 @@ def read_graph(path,N):
 
     """ creates a graph from edgelist, all nodes from 0 to N_1 are included (even if they have no links """
     
+    #print("read_graph:", path)
     G = nx.read_edgelist(path, create_using=nx.DiGraph(),nodetype = int)
-    
     nodes_now = list(G.nodes())
+    #print("number of nodes",len(nodes_now), "n edges: ", G.number_of_edges())
     nodes = list(np.arange(0,N)) #add the missing nodes (nodes with no links)
     missing = set(nodes) - set(nodes_now)
     for node in missing:
         G.add_node(node)
     
     return G,N
+
     
-    
-    
+
 def degfiles_from_dir(fname, path,extra=[""]):
 
     """ looks up all files in path which start with: fname + "_avgdeg_X_ ....
@@ -260,3 +286,153 @@ def degfiles_from_dir(fname, path,extra=[""]):
                     degfiles[deg].append(fil)
                 
     return degfiles
+
+
+
+
+def outdegs(G):
+    
+    degs = {}
+    for node in G:
+        degs[node] = G.out_degree(node)
+        
+    return degs
+
+
+def get_degdict(G,degs):
+    
+    degdict = {}
+    for node in degs:
+        deg = degs[node]
+        if not deg in degdict:
+            degdict[deg] = [node]
+        else:
+            degdict[deg].append(node)
+            
+    return degdict
+
+
+def ordering(nodes,di):
+    
+    vals = []
+    
+    for node in nodes:
+        vals.append(di[node])
+        
+    nodes = list(list(zip(*sorted(zip(vals, nodes))))[1])
+    
+    return nodes
+
+    
+
+def increase_lam(N,avgdeg=2.0, lam_target = 2.3):
+    
+    #keep avg deg and excess deg constants while increasing the leading eigenvalue
+    
+    G,_ = ER_graph(avgdeg,N)
+    nodes = list(G.nodes())
+    exc =  average_excess_degree(G) #keep this also constant
+    lam,eigs = leading_left_eig(G)
+    print("exc",exc,"lam",lam)
+    
+    outdegdict = outdegs(G)
+    degdict = get_degdict(G,outdegdict)
+    
+    tries = 0
+              
+    while lam < lam_target:
+        
+        n1 = n2 = rchoice(nodes)
+        while n1 == n2 or G.has_edge(n1,n2): #choose next node, check that it's not the same as n1
+            n2 = rchoice(nodes)
+
+        n2_out = G.out_degree(n2)
+        n1_out = G.out_degree(n1)
+        n1_in = G.in_degree(n1)
+        
+        if degdict[n2_out] == []: #
+            continue
+        else:
+            nodes_ord = ordering(degdict[n2_out],eigs)
+            
+            hit = False
+            for n4 in nodes_ord:
+                pres = list(G.predecessors(n4))
+                for n3 in pres:
+                    if G.out_degree(n3) == (n1_out+1) and G.in_degree(n3) == n1_in:
+                        hit = True
+                        break
+                        
+                if hit == True:
+                    break
+                        
+            if hit == False:
+                continue
+                
+            
+            else:
+                
+                G.add_edge(n1,n2)
+                G.remove_edge(n3,n4)
+                
+                n1_out = G.out_degree(n1)
+                n3_out = G.out_degree(n3)
+
+                if n1 != n3:
+
+                    degdict[n1_out-1].remove(n1)
+                    if n1_out in degdict:
+                        degdict[n1_out].append(n1)
+                    else:
+                        degdict[n1_out] = [n1]
+
+                    degdict[n3_out+1].remove(n3)
+                    if n3_out in degdict:
+                        degdict[n3_out].append(n3)
+                    else:
+                        degdict[n3_out] = [n3]
+
+
+                tries += 1
+
+                if tries % 5000 == 0:
+                    lam, eigs2 = leading_left_eig(G)
+                    print("round:", tries,lam)
+
+    return G,N
+
+
+
+# +
+def scale_free(N):
+
+    G = nx.scale_free_graph(N, alpha=0.1, beta=0.8, gamma=0.1, delta_in=0.5, delta_out=0.5)
+    F = nx.DiGraph()
+    for node in G.nodes():
+        F.add_node(node)
+
+    edgeset = {}
+    for edge in G.edges():
+        if (not edge in F.edges()) and (not edge[0]==edge[1]) and (not (edge[1],edge[0]) in F.edges()):
+            F.add_edge(edge[0],edge[1])
+            
+    return F,N
+
+
+
+def convert_to_list(lis):
+    
+    lis = list(lis)
+    final = []
+
+    for i in lis[1:-1]:
+        if i == "[":
+            newlis = []
+        elif i == "]":
+            final.append(newlis)
+            newlis = []
+        elif i != ",":
+            newlis.append(int(i))
+            
+    return final
+
